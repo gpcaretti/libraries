@@ -6,6 +6,7 @@
     using System.Net;
     using System.Net.Sockets;
     using System.Text;
+    using System.Threading.Tasks;
     using Kongrevsky.Utilities.Smtp.Models;
 
     #endregion
@@ -67,7 +68,7 @@
         }
 
         /// <summary>
-        /// Validates SMTP credentials
+        ///     Validate passed credential against an SMTP server. Return "true", if all ok.
         /// </summary>
         /// <param name="login"></param>
         /// <param name="password"></param>
@@ -77,32 +78,122 @@
         /// <returns></returns>
         public static bool ValidateCredentials(string login, string password, string server, int port, bool enableSsl)
         {
-            SmtpConnectorBase connector;
-            if (enableSsl)
-                connector = new SmtpConnectorWithSsl(server, port);
-            else
-                connector = new SmtpConnectorWithoutSsl(server, port);
+            return ValidateCredentials(login, password, server, port, enableSsl, out _);
+        }
 
-            if (!connector.CheckResponse(220))
+        /// <summary>
+        ///     Validate passed credential against an SMTP server. Return "true", if all ok.
+        /// </summary>
+        /// <param name="login"></param>
+        /// <param name="password"></param>
+        /// <param name="server"></param>
+        /// <param name="port"></param>
+        /// <param name="enableSsl"></param>
+        /// <param name="reason">Server return info</param>
+        public static bool ValidateCredentials(string login, string password, string server, int port, bool enableSsl, out string reason)
+        {
+            SmtpConnectorBase connector = null;
+            try
+            {
+                if (enableSsl)
+                {
+                    var sslConnector = new SmtpConnectorWithSsl(server, port);
+                    sslConnector.AuthenticateAsClient();
+                    connector = sslConnector;
+                } 
+                else
+                {
+                    connector = new SmtpConnectorWithoutSsl(server, port);
+                }
+            }
+            catch (Exception ex)
+            {
+                reason = ex.Message;
                 return false;
+            }
+
+            if (!connector.CheckResponse(220, out reason))
+            {
+                return false;
+            }
 
             connector.SendData($"HELO {Dns.GetHostName()}{SmtpConnectorBase.EOF}");
-            if (!connector.CheckResponse(250))
+            if (!connector.CheckResponse(250, out reason))
+            {
                 return false;
+            }
 
             connector.SendData($"AUTH LOGIN{SmtpConnectorBase.EOF}");
-            if (!connector.CheckResponse(334))
+            if (!connector.CheckResponse(334, out reason))
+            {
                 return false;
+            }
 
             connector.SendData(Convert.ToBase64String(Encoding.UTF8.GetBytes($"{login}")) + SmtpConnectorBase.EOF);
-            if (!connector.CheckResponse(334))
+            if (!connector.CheckResponse(334, out reason))
+            {
                 return false;
+            }
 
             connector.SendData(Convert.ToBase64String(Encoding.UTF8.GetBytes($"{password}")) + SmtpConnectorBase.EOF);
-            if (!connector.CheckResponse(235))
-                return false;
+            return connector.CheckResponse(235, out reason);
+        }
 
-            return true;
+        /// <summary>
+        ///     Validate passed credential against an SMTP server. Return "true", if all ok.
+        /// </summary>
+        /// <param name="login"></param>
+        /// <param name="password"></param>
+        /// <param name="server"></param>
+        /// <param name="port"></param>
+        /// <param name="enableSsl"></param>
+        public static async Task<bool> ValidateCredentialsAsync(string login, string password, string server, int port, bool enableSsl)
+        {
+            return (await ValidateCredentialsExAsync(login, password, server, port, enableSsl).ConfigureAwait(false)).isSuccess;
+        }
+
+        /// <summary>
+        ///     Validate passed credential against an SMTP server. Return "true", if all ok.
+        /// </summary>
+        /// <param name="login"></param>
+        /// <param name="password"></param>
+        /// <param name="server"></param>
+        /// <param name="port"></param>
+        /// <param name="enableSsl"></param>
+        public static async Task<(bool isSuccess, string Reason)> ValidateCredentialsExAsync(string login, string password, string server, int port, bool enableSsl)
+        {
+            SmtpConnectorBase connector = null;
+            try
+            {
+                if (enableSsl) {
+                    var sslConnector = new SmtpConnectorWithSsl(server, port);
+                    await sslConnector.AuthenticateAsClientAsync().ConfigureAwait(false);
+                    connector = sslConnector;
+                } else {
+                    connector = new SmtpConnectorWithoutSsl(server, port);
+                }
+            }
+            catch (Exception ex) {
+                return (false, ex.Message);
+            }
+
+            var output = await connector.CheckResponseExAsync(220).ConfigureAwait(false);
+            if (!output.IsSuccess) return output;
+
+            await connector.SendDataAsync($"HELO {Dns.GetHostName()}{SmtpConnectorBase.EOF}").ConfigureAwait(false);
+            output = await connector.CheckResponseExAsync(250).ConfigureAwait(false);
+            if (!output.IsSuccess) return output;
+
+            await connector.SendDataAsync($"AUTH LOGIN{SmtpConnectorBase.EOF}").ConfigureAwait(false);
+            output = await connector.CheckResponseExAsync(334).ConfigureAwait(false);
+            if (!output.IsSuccess) return output;
+
+            await connector.SendDataAsync(Convert.ToBase64String(Encoding.UTF8.GetBytes($"{login}")) + SmtpConnectorBase.EOF).ConfigureAwait(false);
+            output = await connector.CheckResponseExAsync(334).ConfigureAwait(false);
+            if (!output.IsSuccess) return output;
+
+            await connector.SendDataAsync(Convert.ToBase64String(Encoding.UTF8.GetBytes($"{password}")) + SmtpConnectorBase.EOF).ConfigureAwait(false);
+            return await connector.CheckResponseExAsync(235).ConfigureAwait(false);
         }
     }
 }
